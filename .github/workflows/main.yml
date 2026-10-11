@@ -182,9 +182,9 @@ jobs:
           }
           EOF
 
-      # Step 6: Gradle से सीधे APK बिल्ड करना (बिना किसी फालतू SDK एक्शन के)
+      # Step 6: Gradle से सीधे APK बिल्ड करना (Fixed: ./gradlew yerine doğrudan gradle kullanıldı)
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace
+        run: gradle assembleDebug --stacktrace
 
       # Step 7: बने हुए APK को अपलोड करना
       - name: Upload Artifact
