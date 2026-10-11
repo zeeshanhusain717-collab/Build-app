@@ -382,7 +382,7 @@ jobs:
                   audioRecord?.startRecording()
                   audioTrack?.play()
 
-                  # Send Audio Thread
+                  // Send Audio Thread
                   Thread {
                       val buf = ByteArray(bufferSize)
                       while (isCallActive) {
@@ -395,7 +395,7 @@ jobs:
                       }
                   }.start()
 
-                  # Receive Audio Thread
+                  // Receive Audio Thread
                   Thread {
                       val buf = ByteArray(bufferSize)
                       while (isCallActive) {
@@ -431,7 +431,7 @@ jobs:
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace
 
-      # Step 8: बने हुए APK को सही पथ के साथ अपलोड करना (Fix applied here)
+      # Step 8: बने हुए APK को सही पथ के साथ अपलोड करना
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
