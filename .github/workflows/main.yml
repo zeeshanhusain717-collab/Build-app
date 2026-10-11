@@ -22,24 +22,20 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      # Step 3: गिटहब के लेटेस्ट रोबोट के लिए ऑफिशियल एंड्रॉइड SDK सेटअप (Platforms & Build-Tools)
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          platforms: android-34
-          build-tools: 34.0.0
-
-      # Step 4: Gradle सेटअप
+      # Step 3: Gradle सेटअप (बिना किसी क्रैश होने वाले SDK एक्शन के)
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.5"
 
-      # Step 5: डायरेक्टरी स्ट्रक्चर और प्रोजेक्ट फ़ाइलें बनाना
+      # Step 4: डायरेक्टरी स्ट्रक्चर और प्रोजेक्ट फ़ाइलें बनाना
       - name: Create Structure & Gradle Files
         run: |
           mkdir -p app/src/main/java/com/bt/procall
           mkdir -p app/src/main/res/values
+
+          # Android SDK पाथ सीधे local.properties में सेट करना
+          echo "sdk.dir=/usr/local/lib/android/sdk" > local.properties
 
           # Settings.gradle
           cat > settings.gradle <<'EOF'
@@ -83,7 +79,7 @@ jobs:
                   minSdk 26
                   targetSdk 34
                   versionCode 1
-                  versionName "2.0.0"
+                  versionName "2.1.0"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -137,7 +133,7 @@ jobs:
           </resources>
           EOF
 
-      # Step 6: MainActivity.kt जनरेट करना
+      # Step 5: कम्पलीट एडवांस्ड MainActivity.kt जनरेट करना
       - name: Generate MainActivity
         run: |
           cat > app/src/main/java/com/bt/procall/MainActivity.kt <<'EOF'
@@ -145,80 +141,300 @@ jobs:
 
           import android.Manifest
           import android.bluetooth.*
+          import android.content.pm.PackageManager
+          import android.media.*
           import android.os.Bundle
           import android.view.Gravity
           import android.widget.*
           import androidx.appcompat.app.AppCompatActivity
           import androidx.core.app.ActivityCompat
+          import java.io.InputStream
+          import java.io.OutputStream
           import java.util.*
 
           class MainActivity : AppCompatActivity() {
-              private val UUID_SECURE: UUID = UUID.fromString("fa87c0d0-afac-11de-8a39-0800200c9a66")
+
+              private val MY_UUID: UUID = UUID.fromString("fa87c0d0-afac-11de-8a39-0800200c9a66")
               private var bluetoothAdapter: BluetoothAdapter? = null
-              
+              private var bluetoothSocket: BluetoothSocket? = null
+              private var outputStream: OutputStream? = null
+              private var inputStream: InputStream? = null
+
+              private var audioRecord: AudioRecord? = null
+              private var audioTrack: AudioTrack? = null
+              private var isCallActive = false
+              private var isMuted = false
+
+              private lateinit var statusText: TextView
+              private lateinit var deviceListView: ListView
+              private val deviceList = ArrayList<String>()
+              private val deviceAddressMap = HashMap<String, String>()
+              private lateinit var adapter: ArrayAdapter<String>
+
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
-                  requestAppPermissions()
-                  setupUI()
-                  initBT()
+                  requestPermissions()
+                  initBluetooth()
+                  showHomeUI()
               }
 
-              private fun requestAppPermissions() {
-                  val permissions = arrayOf(
+              private fun requestPermissions() {
+                  val perms = arrayOf(
                       Manifest.permission.BLUETOOTH_SCAN,
                       Manifest.permission.BLUETOOTH_CONNECT,
+                      Manifest.permission.BLUETOOTH_ADMIN,
                       Manifest.permission.RECORD_AUDIO,
                       Manifest.permission.ACCESS_FINE_LOCATION
                   )
-                  ActivityCompat.requestPermissions(this, permissions, 202)
+                  ActivityCompat.requestPermissions(this, perms, 301)
               }
 
-              private fun setupUI() {
-                  val layout = LinearLayout(this).apply {
+              private fun initBluetooth() {
+                  val manager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
+                  bluetoothAdapter = manager.adapter
+              }
+
+              private fun showHomeUI() {
+                  val root = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      setBackgroundColor(0xFF0B132B.toInt())
-                      setPadding(40, 60, 40, 60)
+                      setBackgroundColor(0xFF070F1E.toInt())
+                      setPadding(32, 48, 32, 48)
                       gravity = Gravity.CENTER_HORIZONTAL
                   }
 
                   val title = TextView(this).apply {
                       text = "🛡️ BT Pro Intercom"
-                      textSize = 26f
+                      textSize = 24f
                       setTextColor(0xFFFFD700.toInt())
-                      setPadding(0, 0, 0, 40)
+                      gravity = Gravity.CENTER
+                      setPadding(0, 0, 0, 24)
                   }
-                  layout.addView(title)
+                  root.addView(title)
 
-                  val info = TextView(this).apply {
-                      text = "System Ready. Tap below to host or connect."
-                      textSize = 16f
+                  statusText = TextView(this).apply {
+                      text = "Status: Ready\nSelect paired device or start server."
+                      textSize = 14f
                       setTextColor(0xFF94A3B8.toInt())
                       gravity = Gravity.CENTER
-                      setPadding(0, 20, 0, 40)
+                      setPadding(0, 10, 0, 20)
                   }
-                  layout.addView(info)
+                  root.addView(statusText)
 
-                  setContentView(layout)
+                  val btnServer = Button(this).apply {
+                      text = "🟢 Start Server (Wait for Call)"
+                      setBackgroundColor(0xFF10B981.toInt())
+                      setTextColor(0xFFFFFFFF.toInt())
+                      setOnClickListener { startServer() }
+                  }
+                  root.addView(btnServer)
+
+                  val btnScan = Button(this).apply {
+                      text = "🔵 Load Paired Devices"
+                      setBackgroundColor(0xFF3B82F6.toInt())
+                      setTextColor(0xFFFFFFFF.toInt())
+                      setOnClickListener { loadPairedDevices() }
+                  }
+                  root.addView(btnScan)
+
+                  deviceListView = ListView(this).apply {
+                      setBackgroundColor(0xFF0B132B.toInt())
+                  }
+                  adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, deviceList)
+                  deviceListView.adapter = adapter
+
+                  deviceListView.setOnItemClickListener { _, _, position, _ ->
+                      val name = deviceList[position]
+                      val address = deviceAddressMap[name]
+                      if (address != null) {
+                          connectToDevice(address, name)
+                      }
+                  }
+
+                  val params = LinearLayout.LayoutParams(
+                      LinearLayout.LayoutParams.MATCH_PARENT,
+                      0, 1f
+                  ).apply { topMargin = 20 }
+                  root.addView(deviceListView, params)
+
+                  setContentView(root)
               }
 
-              private fun initBT() {
-                  val manager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
-                  bluetoothAdapter = manager.adapter
+              private fun loadPairedDevices() {
+                  if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return
+                  deviceList.clear()
+                  deviceAddressMap.clear()
+                  val paired = bluetoothAdapter?.bondedDevices
+                  if (paired != null && paired.isNotEmpty()) {
+                      for (device in paired) {
+                          val name = device.name ?: "Unknown"
+                          val addr = device.address
+                          deviceList.add(name)
+                          deviceAddressMap[name] = addr
+                      }
+                      adapter.notifyDataSetChanged()
+                      statusText.text = "Select a device to connect:"
+                  } else {
+                      statusText.text = "No paired devices found. Pair via phone settings first."
+                  }
+              }
+
+              private fun startServer() {
+                  statusText.text = "Status: Waiting for incoming connection..."
+                  Thread {
+                      try {
+                          if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return@Thread
+                          val serverSocket = bluetoothAdapter?.listenUsingRfcommWithServiceRecord("BTProCall", MY_UUID)
+                          val socket = serverSocket?.accept()
+                          serverSocket?.close()
+                          if (socket != null) {
+                              bluetoothSocket = socket
+                              outputStream = socket.outputStream
+                              inputStream = socket.inputStream
+                              runOnUiThread { showActiveCallUI("Connected Peer") }
+                              startAudioEngine()
+                          }
+                      } catch (e: Exception) {
+                          runOnUiThread { statusText.text = "Server Error: ${e.message}" }
+                      }
+                  }.start()
+              }
+
+              private fun connectToDevice(address: String, name: String) {
+                  statusText.text = "Connecting to $name..."
+                  Thread {
+                      try {
+                          if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return@Thread
+                          val device = bluetoothAdapter?.getRemoteDevice(address)
+                          val socket = device?.createRfcommSocketToServiceRecord(MY_UUID)
+                          socket?.connect()
+                          if (socket != null) {
+                              bluetoothSocket = socket
+                              outputStream = socket.outputStream
+                              inputStream = socket.inputStream
+                              runOnUiThread { showActiveCallUI(name) }
+                              startAudioEngine()
+                          }
+                      } catch (e: Exception) {
+                          runOnUiThread { statusText.text = "Connection Failed: ${e.message}" }
+                      }
+                  }.start()
+              }
+
+              private fun showActiveCallUI(peerName: String) {
+                  val callLayout = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setBackgroundColor(0xFF070F1E.toInt())
+                      setPadding(40, 80, 40, 80)
+                      gravity = Gravity.CENTER_HORIZONTAL
+                  }
+
+                  val nameView = TextView(this).apply {
+                      text = "📞 In Call With:\n$peerName"
+                      textSize = 22f
+                      setTextColor(0xFFFFD700.toInt())
+                      gravity = Gravity.CENTER
+                      setPadding(0, 0, 0, 60)
+                  }
+                  callLayout.addView(nameView)
+
+                  val btnMute = Button(this).apply {
+                      text = "🎤 Mute: OFF"
+                      setBackgroundColor(0xFF334155.toInt())
+                      setTextColor(0xFFFFFFFF.toInt())
+                      setOnClickListener {
+                          isMuted = !isMuted
+                          text = if (isMuted) "🎤 Mute: ON" else "🎤 Mute: OFF"
+                      }
+                  }
+                  callLayout.addView(btnMute)
+
+                  val btnEnd = Button(this).apply {
+                      text = "🔴 End Call"
+                      setBackgroundColor(0xFFEF4444.toInt())
+                      setTextColor(0xFFFFFFFF.toInt())
+                      setOnClickListener { endCall() }
+                  }
+                  val endParams = LinearLayout.LayoutParams(
+                      LinearLayout.LayoutParams.MATCH_PARENT,
+                      LinearLayout.LayoutParams.WRAP_CONTENT
+                  ).apply { topMargin = 30 }
+                  callLayout.addView(btnEnd, endParams)
+
+                  setContentView(callLayout)
+                  isCallActive = true
+              }
+
+              private fun startAudioEngine() {
+                  val rate = 8000
+                  val channelIn = AudioFormat.CHANNEL_IN_MONO
+                  val channelOut = AudioFormat.CHANNEL_OUT_MONO
+                  val format = AudioFormat.ENCODING_PCM_16BIT
+                  val bufferSize = AudioRecord.getMinBufferSize(rate, channelIn, format)
+
+                  if (ActivityCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return
+
+                  audioRecord = AudioRecord(MediaRecorder.AudioSource.MIC, rate, channelIn, format, bufferSize)
+                  audioTrack = AudioTrack.Builder()
+                      .setAudioFormat(AudioFormat.Builder().setEncoding(format).setSampleRate(rate).setChannelMask(channelOut).build())
+                      .setBufferSizeInBytes(bufferSize)
+                      .build()
+
+                  audioRecord?.startRecording()
+                  audioTrack?.play()
+
+                  // Send Audio Thread
+                  Thread {
+                      val buf = ByteArray(bufferSize)
+                      while (isCallActive) {
+                          val read = audioRecord?.read(buf, 0, buf.size) ?: 0
+                          if (read > 0 && !isMuted) {
+                              try {
+                                  outputStream?.write(buf, 0, read)
+                              } catch (e: Exception) { break }
+                          }
+                      }
+                  }.start()
+
+                  // Receive Audio Thread
+                  Thread {
+                      val buf = ByteArray(bufferSize)
+                      while (isCallActive) {
+                          try {
+                              val read = inputStream?.read(buf) ?: -1
+                              if (read > 0) {
+                                  audioTrack?.write(buf, 0, read)
+                              }
+                          } catch (e: Exception) { break }
+                      }
+                  }.start()
+              }
+
+              private fun endCall() {
+                  isCallActive = false
+                  try {
+                      audioRecord?.stop()
+                      audioRecord?.release()
+                      audioTrack?.stop()
+                      audioTrack?.release()
+                      bluetoothSocket?.close()
+                  } catch (e: Exception) {}
+                  showHomeUI()
               }
           }
           EOF
 
-      # Step 7: Gradle Wrapper बनाना
+      # Step 6: Gradle Wrapper बनाना
       - name: Generate Gradle Wrapper
         run: gradle wrapper --gradle-version 8.5
 
-      # Step 8: APK बिल्ड करना
+      # Step 7: APK बिल्ड करना
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace
 
-      # Step 9: बने हुए APK को अपलोड करना
+      # Step 8: बने हुए APK को अपलोड करना
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: BT-Pro-Call-APK
           path: app/build/outputs/apk/debug/app-debug.apk
+
