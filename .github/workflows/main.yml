@@ -1,0 +1,197 @@
+name: Build Pro Bluetooth Call APK
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.5"
+
+      - name: Create Structure & Gradle Files
+        run: |
+          mkdir -p app/src/main/java/com/bt/procall
+          mkdir -p app/src/main/res/values
+
+          cat > build.gradle <<'EOF'
+          plugins {
+              id "com.android.application" version "8.2.2" apply false
+              id "org.jetbrains.kotlin.android" version "1.9.22" apply false
+          }
+          EOF
+
+          cat > settings.gradle <<'EOF'
+          rootProject.name = "BTProCall"
+          include(":app")
+          EOF
+
+          cat > app/build.gradle <<'EOF'
+          plugins {
+              id "com.android.application"
+              id "org.jetbrains.kotlin.android"
+          }
+          android {
+              namespace "com.bt.procall"
+              compileSdk 34
+              defaultConfig {
+                  applicationId "com.bt.procall"
+                  minSdk 26
+                  targetSdk 34
+                  versionCode 1
+                  versionName "2.0.0"
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+          }
+          dependencies {
+              implementation "androidx.core:core-ktx:1.13.1"
+              implementation "androidx.appcompat:appcompat:1.7.0"
+              implementation "com.google.android.material:material:1.12.0"
+          }
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.BLUETOOTH" />
+              <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+              <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+              <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+              <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+              <uses-permission android:name="android.permission.RECORD_AUDIO" />
+              <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
+              <application
+                  android:allowBackup="true"
+                  android:label="BT Pro Call"
+                  android:theme="@style/Theme.AppCompat.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:screenOrientation="portrait">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/res/values/strings.xml <<'EOF'
+          <resources>
+              <string name="app_name">BT Pro Call</string>
+          </resources>
+          EOF
+
+      - name: Generate MainActivity
+        run: |
+          cat > app/src/main/java/com/bt/procall/MainActivity.kt <<'EOF'
+          package com.bt.procall
+
+          import android.Manifest
+          import android.bluetooth.*
+          import android.content.pm.PackageManager
+          import android.media.*
+          import android.os.Bundle
+          import android.view.Gravity
+          import android.widget.*
+          import androidx.appcompat.app.AppCompatActivity
+          import androidx.core.app.ActivityCompat
+          import java.io.InputStream
+          import java.io.OutputStream
+          import java.util.*
+
+          class MainActivity : AppCompatActivity() {
+              private val UUID_SECURE: UUID = UUID.fromString("fa87c0d0-afac-11de-8a39-0800200c9a66")
+              private var bluetoothAdapter: BluetoothAdapter? = null
+              private var socket: BluetoothSocket? = null
+              private var isRunning = false
+              
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  requestAppPermissions()
+                  setupUI()
+                  initBT()
+              }
+
+              private fun requestAppPermissions() {
+                  val permissions = arrayOf(
+                      Manifest.permission.BLUETOOTH_SCAN,
+                      Manifest.permission.BLUETOOTH_CONNECT,
+                      Manifest.permission.RECORD_AUDIO,
+                      Manifest.permission.ACCESS_FINE_LOCATION
+                  )
+                  ActivityCompat.requestPermissions(this, permissions, 202)
+              }
+
+              private fun setupUI() {
+                  val layout = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setBackgroundColor(0xFF0B132B.toInt())
+                      setPadding(40, 60, 40, 60)
+                      gravity = Gravity.CENTER_HORIZONTAL
+                  }
+
+                  val title = TextView(this).apply {
+                      text = "🛡️ BT Pro Intercom"
+                      textSize = 26f
+                      setTextColor(0xFFFFD700.toInt())
+                      setPadding(0, 0, 0, 40)
+                  }
+                  layout.addView(title)
+
+                  val info = TextView(this).apply {
+                      text = "System Ready. Tap below to host or connect."
+                      textSize = 16f
+                      setTextColor(0xFF94A3B8.toInt())
+                      gravity = Gravity.CENTER
+                      setPadding(0, 20, 0, 40)
+                  }
+                  layout.addView(info)
+
+                  setContentView(layout)
+              }
+
+              private fun initBT() {
+                  val manager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
+                  bluetoothAdapter = manager.adapter
+              }
+          }
+          EOF
+
+      - name: Build Debug APK
+        run: gradle assembleDebug
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BT-Pro-Call-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+
