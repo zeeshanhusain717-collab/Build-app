@@ -35,7 +35,6 @@ jobs:
           set -euo pipefail
           mkdir -p app/src/main/java/com/bluetooth/call
           mkdir -p app/src/main/res/values
-          mkdir -p app/src/main/res/drawable
 
           cat > gradle.properties <<'EOF'
           org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8
@@ -73,8 +72,8 @@ jobs:
                   applicationId "com.bluetooth.call"
                   minSdk 26
                   targetSdk 34
-                  versionCode 2
-                  versionName "3.0"
+                  versionCode 8
+                  versionName "8.0"
               }
               buildTypes { release { minifyEnabled false } }
               compileOptions {
@@ -90,7 +89,7 @@ jobs:
           }
           EOF
 
-      - name: Generate App Resources, Icon & Manifest
+      - name: Generate App Resources & Manifest
         run: |
           set -euo pipefail
 
@@ -99,23 +98,6 @@ jobs:
           <resources>
               <string name="app_name">Bluetooth Call</string>
           </resources>
-          EOF
-
-          # 3D Bluetooth Vector Logo
-          cat > app/src/main/res/drawable/ic_bluetooth.xml <<'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <vector xmlns:android="http://schemas.android.com/apk/res/android"
-              android:width="120dp"
-              android:height="120dp"
-              android:viewportWidth="24"
-              android:viewportHeight="24">
-              <path
-                  android:fillColor="#2563EB"
-                  android:pathData="M12,2C6.48,2 2,6.48 2,12s4.48,10 10,10 10,-4.48 10,-10S17.52,2 12,2zM13.5,8l3.25,3.25L13.5,14.5V8zM10.5,16V8l-3.25,3.25L10.5,16z" />
-              <path
-                  android:fillColor="#FFFFFF"
-                  android:pathData="M17.71,7.71L12,2h-1v7.59L6.41,5.03 5,6.44 10.56,12 5,17.56 6.41,18.97 11,14.41V22h1l5.71-5.71-4.3-4.29 4.3-4.29zM12,4.83l2.88,2.88L12,10.59V4.83zM12,19.17v-5.76l2.88,2.88L12,19.17z"/>
-          </vector>
           EOF
 
           cat > app/src/main/AndroidManifest.xml <<'EOF'
@@ -130,12 +112,12 @@ jobs:
               <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
               <uses-permission android:name="android.permission.RECORD_AUDIO" />
               <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
               <application
                   android:allowBackup="false"
                   android:label="@string/app_name"
-                  android:icon="@drawable/ic_bluetooth"
-                  android:roundIcon="@drawable/ic_bluetooth"
                   android:supportsRtl="true"
                   android:theme="@style/Theme.AppCompat.DayNight.NoActionBar">
                   <activity
@@ -151,7 +133,7 @@ jobs:
           </manifest>
           EOF
 
-      - name: Write MainActivity.kt with 3D UI & In-Call Controls
+      - name: Write MainActivity.kt with Answer-Only Kill Logic
         run: |
           cat > app/src/main/java/com/bluetooth/call/MainActivity.kt <<'EOF'
           package com.bluetooth.call
@@ -174,8 +156,13 @@ jobs:
           import android.media.AudioRecord
           import android.media.AudioTrack
           import android.media.MediaRecorder
+          import android.media.audiofx.AcousticEchoCanceler
           import android.os.Build
           import android.os.Bundle
+          import android.os.Handler
+          import android.os.Looper
+          import android.telephony.PhoneStateListener
+          import android.telephony.TelephonyManager
           import android.view.Gravity
           import android.view.View
           import android.widget.*
@@ -203,23 +190,17 @@ jobs:
               private var acceptThread: AcceptThread? = null
               private var connectThread: ConnectThread? = null
               private var audioThread: AudioStreamThread? = null
-              private var isCallRunning = false
-              private var isMuted = false
-              private var isRecordingAudio = false
+              
+              @Volatile private var isCallActive = false
+              private var activeSocket: BluetoothSocket? = null
 
-              // UI Layouts
-              private lateinit var mainDashboardLayout: LinearLayout
-              private lateinit var inCallScreenLayout: LinearLayout
               private lateinit var statusTv: TextView
               private lateinit var scanBtn: Button
+              private lateinit var disconnectBtn: Button
               private lateinit var listView: ListView
 
-              // In-Call UI Elements
-              private lateinit var connectedUserTv: TextView
-              private lateinit var callTimerTv: TextView
-              private lateinit var muteBtn: Button
-              private lateinit var recordBtn: Button
-              private lateinit var endCallBtn: Button
+              private val handler = Handler(Looper.getMainLooper())
+              private var scanRunnable: Runnable? = null
 
               private val receiver = object : BroadcastReceiver() {
                   override fun onReceive(context: Context, intent: Intent) {
@@ -236,15 +217,20 @@ jobs:
                                       val name = dev.name ?: "Unknown"
                                       if (!foundDevices.contains(dev) && !name.contains("Unknown")) {
                                           foundDevices.add(dev)
-                                          deviceNames.add("📱 $name\n${dev.address}")
+                                          val isVerified = name.contains("Zeeshan", ignoreCase = true) || name.contains("Call", ignoreCase = true) || name.contains("Galaxy", ignoreCase = true) || name.contains("Redmi", ignoreCase = true) || name.contains("Vivo", ignoreCase = true) || name.contains("OPPO", ignoreCase = true)
+                                          
+                                          if (isVerified) {
+                                              deviceNames.add("🟢 Verified App User: $name\n${dev.address}")
+                                          } else {
+                                              deviceNames.add("📱 Bluetooth Device: $name\n${dev.address}")
+                                          }
                                           listAdapter.notifyDataSetChanged()
                                       }
                                   }
                               }
                           }
                           BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
-                              scanBtn.text = "🔍 Scan Nearby App Users"
-                              scanBtn.isEnabled = true
+                              resetScanButton()
                           }
                       }
                   }
@@ -254,78 +240,54 @@ jobs:
                   super.onCreate(savedInstanceState)
                   btAdapter = BluetoothAdapter.getDefaultAdapter()
 
-                  // Root Container (White Background)
-                  val rootLayout = FrameLayout(this).apply {
-                      layoutParams = FrameLayout.LayoutParams(-1, -1)
-                      setBackgroundColor(Color.parseColor("#F8FAFC"))
-                  }
-
-                  // 1. DASHBOARD LAYOUT
-                  mainDashboardLayout = LinearLayout(this).apply {
+                  val root = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      layoutParams = FrameLayout.LayoutParams(-1, -1)
+                      setBackgroundColor(Color.parseColor("#0F172A"))
+                      setPadding(35, 45, 35, 45)
+                      layoutParams = LinearLayout.LayoutParams(-1, -1)
                   }
 
-                  // 3D Blue Header Bar
-                  val headerBar = LinearLayout(this).apply {
-                      orientation = LinearLayout.VERTICAL
-                      gravity = Gravity.CENTER
-                      setPadding(30, 45, 30, 45)
-                      background = GradientDrawable(
-                          GradientDrawable.Orientation.TOP_BOTTOM,
-                          intArrayOf(Color.parseColor("#1E40AF"), Color.parseColor("#1D4ED8"))
-                      ).apply {
-                          cornerRadii = floatArrayOf(0f, 0f, 0f, 0f, 30f, 30f, 30f, 30f)
-                      }
-                      elevation = 12f
-                  }
-
-                  val headerTitle = TextView(this).apply {
-                      text = "BLUETOOTH CALL"
-                      textSize = 22f
+                  val title = TextView(this).apply {
+                      text = "🎙️ Zeeshan Bluetooth Call"
+                      textSize = 20f
                       setTypeface(null, Typeface.BOLD)
                       setTextColor(Color.WHITE)
                       gravity = Gravity.CENTER
+                      setPadding(0, 0, 0, 25)
                   }
 
                   statusTv = TextView(this).apply {
                       text = "Status: Ready & Waiting"
-                      textSize = 14f
-                      setTextColor(Color.parseColor("#93C5FD"))
+                      textSize = 15f
+                      setTextColor(Color.parseColor("#38BDF8"))
                       gravity = Gravity.CENTER
-                      setPadding(0, 8, 0, 0)
-                  }
-
-                  headerBar.addView(headerTitle)
-                  headerBar.addView(statusTv)
-
-                  // Content Area under Header
-                  val contentArea = LinearLayout(this).apply {
-                      orientation = LinearLayout.VERTICAL
-                      setPadding(30, 30, 30, 30)
-                      layoutParams = LinearLayout.LayoutParams(-1, 0, 1f)
+                      setPadding(0, 0, 0, 20)
                   }
 
                   scanBtn = Button(this).apply {
-                      text = "🔍 Scan Nearby App Users"
-                      textSize = 15f
+                      text = "🔍 Scan Nearby App Users (5 Sec)"
+                      setBackgroundColor(Color.parseColor("#10B981"))
                       setTextColor(Color.WHITE)
                       setTypeface(null, Typeface.BOLD)
-                      background = GradientDrawable().apply {
-                          setColor(Color.parseColor("#10B981")) // Green 3D Button
-                          cornerRadius = 25f
-                      }
-                      elevation = 6f
                       setOnClickListener { startDeviceScan() }
-                      layoutParams = LinearLayout.LayoutParams(-1, 130).apply { setMargins(0, 0, 0, 20) }
+                      layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 0, 0, 15) }
+                  }
+
+                  disconnectBtn = Button(this).apply {
+                      text = "🛑 End Call / Disconnect"
+                      setBackgroundColor(Color.parseColor("#EF4444"))
+                      setTextColor(Color.WHITE)
+                      setTypeface(null, Typeface.BOLD)
+                      visibility = View.GONE
+                      setOnClickListener { terminateCall() }
+                      layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 0, 0, 15) }
                   }
 
                   listView = ListView(this).apply {
                       layoutParams = LinearLayout.LayoutParams(-1, 0, 1f)
                       background = GradientDrawable().apply {
-                          setColor(Color.WHITE) // White Background Box
-                          cornerRadius = 25f
-                          setStroke(2, Color.parseColor("#E2E8F0"))
+                          setColor(Color.parseColor("#1E293B"))
+                          cornerRadius = 20f
                       }
                   }
 
@@ -334,126 +296,28 @@ jobs:
 
                   listView.setOnItemClickListener { _, _, pos, _ ->
                       if (pos < foundDevices.size) {
-                          connectToPeer(foundDevices[pos])
+                          val selectedDevice = foundDevices[pos]
+                          connectToPeer(selectedDevice)
                       }
                   }
 
-                  contentArea.addView(scanBtn)
-                  contentArea.addView(listView)
-
-                  mainDashboardLayout.addView(headerBar)
-                  mainDashboardLayout.addView(contentArea)
-
-
-                  // 2. IN-CALL SCREEN LAYOUT (Hidden by default)
-                  inCallScreenLayout = LinearLayout(this).apply {
-                      orientation = LinearLayout.VERTICAL
-                      gravity = Gravity.CENTER_HORIZONTAL
-                      setBackgroundColor(Color.parseColor("#0F172A")) // Dark Immersive In-Call BG
-                      setPadding(40, 80, 40, 60)
-                      visibility = View.GONE
-                      layoutParams = FrameLayout.LayoutParams(-1, -1)
-                  }
-
-                  val inCallIcon = TextView(this).apply {
-                      text = "📞"
-                      textSize = 50f
-                      gravity = Gravity.CENTER
-                      setPadding(0, 0, 0, 20)
-                  }
-
-                  val inCallLabel = TextView(this).apply {
-                      text = "Connected Call"
-                      textSize = 16f
-                      setTextColor(Color.parseColor("#94A3B8"))
-                      gravity = Gravity.CENTER
-                  }
-
-                  connectedUserTv = TextView(this).apply {
-                      text = "User Name"
-                      textSize = 26f
-                      setTypeface(null, Typeface.BOLD)
-                      setTextColor(Color.WHITE)
-                      gravity = Gravity.CENTER
-                      setPadding(0, 10, 0, 10)
-                  }
-
-                  callTimerTv = TextView(this).apply {
-                      text = "00:00"
-                      textSize = 15f
-                      setTextColor(Color.parseColor("#38BDF8"))
-                      gravity = Gravity.CENTER
-                      setPadding(0, 0, 0, 50)
-                  }
-
-                  inCallScreenLayout.addView(inCallIcon)
-                  inCallScreenLayout.addView(inCallLabel)
-                  inCallScreenLayout.addView(connectedUserTv)
-                  inCallScreenLayout.addView(callTimerTv)
-
-                  // In-Call Action Buttons Row (Mute, Record, End)
-                  val actionRow = LinearLayout(this).apply {
-                      orientation = LinearLayout.HORIZONTAL
-                      gravity = Gravity.CENTER
-                      layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 40, 0, 0) }
-                  }
-
-                  muteBtn = Button(this).apply {
-                      text = "🎤 Mute"
-                      textSize = 13f
-                      setTextColor(Color.WHITE)
-                      background = GradientDrawable().apply {
-                          shape = GradientDrawable.OVAL
-                          setColor(Color.parseColor("#334155"))
-                      }
-                      layoutParams = LinearLayout.LayoutParams(160, 160).apply { setMargins(15, 0, 15, 0) }
-                      setOnClickListener { toggleMute() }
-                  }
-
-                  recordBtn = Button(this).apply {
-                      text = "⏺️ Record"
-                      textSize = 13f
-                      setTextColor(Color.WHITE)
-                      background = GradientDrawable().apply {
-                          shape = GradientDrawable.OVAL
-                          setColor(Color.parseColor("#334155"))
-                      }
-                      layoutParams = LinearLayout.LayoutParams(160, 160).apply { setMargins(15, 0, 15, 0) }
-                      setOnClickListener { toggleAudioRecording() }
-                  }
-
-                  actionRow.addView(muteBtn)
-                  actionRow.addView(recordBtn)
-                  inCallScreenLayout.addView(actionRow)
-
-                  // Red End Call Button at Bottom
-                  endCallBtn = Button(this).apply {
-                      text = "🔴 End Call"
-                      textSize = 16f
-                      setTextColor(Color.WHITE)
-                      setTypeface(null, Typeface.BOLD)
-                      background = GradientDrawable().apply {
-                          setColor(Color.parseColor("#EF4444"))
-                          cornerRadius = 40f
-                      }
-                      elevation = 8f
-                      setOnClickListener { terminateCall() }
-                      layoutParams = LinearLayout.LayoutParams(500, 130).apply { setMargins(0, 80, 0, 0) }
-                  }
-                  inCallScreenLayout.addView(endCallBtn)
-
-                  rootLayout.addView(mainDashboardLayout)
-                  rootLayout.addView(inCallScreenLayout)
-                  setContentView(rootLayout)
+                  root.addView(title)
+                  root.addView(statusTv)
+                  root.addView(scanBtn)
+                  root.addView(disconnectBtn)
+                  root.addView(listView)
+                  setContentView(root)
 
                   checkPermissionsAndInit()
+                  setupPhoneStateListener()
               }
 
               private fun checkPermissionsAndInit() {
                   val perms = mutableListOf(
                       Manifest.permission.RECORD_AUDIO,
                       Manifest.permission.ACCESS_FINE_LOCATION,
-                      Manifest.permission.ACCESS_COARSE_LOCATION
+                      Manifest.permission.ACCESS_COARSE_LOCATION,
+                      Manifest.permission.READ_PHONE_STATE
                   )
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                       perms.add(Manifest.permission.BLUETOOTH_SCAN)
@@ -477,10 +341,39 @@ jobs:
                   registerReceiver(receiver, filter)
               }
 
+              // केवल कॉल उठने पर (OFFHOOK) ब्लूटूथ कॉल किल और ब्लूटूथ बंद करने का सेटअप
+              private fun setupPhoneStateListener() {
+                  try {
+                      val telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+                      @Suppress("DEPRECATION")
+                      telephonyManager.listen(object : PhoneStateListener() {
+                          override fun onCallStateChanged(state: Int, phoneNumber: String?) {
+                              super.onCallStateChanged(state, phoneNumber)
+                              // केवल तभी जब यूजर कॉल उठा ले (OFFHOOK)
+                              if (state == TelephonyManager.CALL_STATE_OFFHOOK) {
+                                  if (isCallActive) {
+                                      terminateCall()
+                                      
+                                      if (btAdapter != null && btAdapter!!.isEnabled) {
+                                          if (ActivityCompat.checkSelfPermission(this@MainActivity, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
+                                              btAdapter!!.disable()
+                                          }
+                                      }
+
+                                      Toast.makeText(this@MainActivity, "Phone call answered: Bluetooth call killed & turned off", Toast.LENGTH_LONG).show()
+                                  }
+                              }
+                          }
+                      }, PhoneStateListener.LISTEN_CALL_STATE)
+                  } catch (e: Exception) {
+                      e.printStackTrace()
+                  }
+              }
+
               private fun startDeviceScan() {
                   if (btAdapter == null) return
-                  if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
-                      Toast.makeText(this, "Permission required!", Toast.LENGTH_SHORT).show()
+                  if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                      Toast.makeText(this, "Bluetooth Scan permission needed!", Toast.LENGTH_SHORT).show()
                       return
                   }
 
@@ -491,15 +384,33 @@ jobs:
                   btAdapter?.bondedDevices?.let { paired ->
                       for (d in paired) {
                           foundDevices.add(d)
-                          deviceNames.add("⭐ Paired: ${d.name}\n${d.address}")
+                          deviceNames.add("⭐ Paired App User: ${d.name}\n${d.address}")
                       }
                       listAdapter.notifyDataSetChanged()
                   }
 
-                  if (btAdapter!!.isDiscovering) btAdapter!!.cancelDiscovery()
+                  if (btAdapter!!.isDiscovering) {
+                      btAdapter!!.cancelDiscovery()
+                  }
                   btAdapter!!.startDiscovery()
-                  scanBtn.text = "Scanning..."
+                  scanBtn.text = "Scanning (5s)..."
                   scanBtn.isEnabled = false
+                  Toast.makeText(this, "Scanning for 5 seconds...", Toast.LENGTH_SHORT).show()
+
+                  scanRunnable = Runnable {
+                      if (btAdapter != null && ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED) {
+                          if (btAdapter!!.isDiscovering) {
+                              btAdapter!!.cancelDiscovery()
+                          }
+                      }
+                      resetScanButton()
+                  }
+                  handler.postDelayed(scanRunnable!!, 5000)
+              }
+
+              private fun resetScanButton() {
+                  scanBtn.text = "🔍 Scan Nearby App Users (5 Sec)"
+                  scanBtn.isEnabled = true
               }
 
               private fun startIncomingListener() {
@@ -510,106 +421,145 @@ jobs:
 
               private inner class AcceptThread : Thread() {
                   private var serverSocket: BluetoothServerSocket? = null
+
                   init {
                       try {
                           if (ActivityCompat.checkSelfPermission(this@MainActivity, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
                               serverSocket = btAdapter?.listenUsingRfcommWithServiceRecord(SERVICE_NAME, APP_UUID)
                           }
-                      } catch (e: IOException) { e.printStackTrace() }
+                      } catch (e: IOException) {
+                          e.printStackTrace()
+                      }
                   }
 
                   override fun run() {
                       var socket: BluetoothSocket?
                       while (true) {
-                          try { socket = serverSocket?.accept() } catch (e: IOException) { break }
-                          if (socket != null) {
-                              val name = socket.remoteDevice?.name ?: "User"
-                              runOnUiThread { showIncomingPopup(socket, name) }
+                          try {
+                              socket = serverSocket?.accept()
+                          } catch (e: IOException) {
                               break
+                          }
+                          if (socket != null) {
+                              val remoteName = socket.remoteDevice?.name ?: "User"
+                              
+                              if (isCallActive) {
+                                  runOnUiThread {
+                                      showCallWaitingPopup(socket, remoteName)
+                                  }
+                              } else {
+                                  runOnUiThread {
+                                      showIncomingCallPopup(socket, remoteName)
+                                  }
+                              }
                           }
                       }
                   }
-                  fun cancel() { try { serverSocket?.close() } catch (e: Exception) {} }
+
+                  fun cancel() {
+                      try { serverSocket?.close() } catch (e: Exception) {}
+                  }
               }
 
-              private fun showIncomingPopup(socket: BluetoothSocket, caller: String) {
+              private fun showIncomingCallPopup(socket: BluetoothSocket, callerName: String) {
                   AlertDialog.Builder(this)
-                      .setTitle("📞 Incoming Bluetooth Call")
-                      .setMessage("$caller is calling you.")
+                      .setTitle("📞 Incoming Bluetooth Call!")
+                      .setMessage("$callerName is calling you via Bluetooth.")
                       .setCancelable(false)
                       .setPositiveButton("Accept") { _, _ ->
-                          switchToInCallUI(caller)
+                          activeSocket?.close()
+                          activeSocket = socket
+                          isCallActive = true
+                          statusTv.text = "Status: Connected with $callerName"
+                          statusTv.setTextColor(Color.parseColor("#10B981"))
+                          scanBtn.visibility = View.GONE
+                          disconnectBtn.visibility = View.VISIBLE
+                          listView.visibility = View.GONE
                           initAudioStream(socket)
                       }
                       .setNegativeButton("Reject") { _, _ ->
                           try { socket.close() } catch (e: Exception) {}
-                          startIncomingListener()
+                      }
+                      .show()
+              }
+
+              private fun showCallWaitingPopup(newSocket: BluetoothSocket, callerName: String) {
+                  AlertDialog.Builder(this)
+                      .setTitle("⏳ Call Waiting (Another Call)")
+                      .setMessage("$callerName is calling while you are on a call. Switch to this call?")
+                      .setCancelable(false)
+                      .setPositiveButton("Accept & Switch") { _, _ ->
+                          isCallActive = false
+                          try { activeSocket?.close() } catch (e: Exception) {}
+                          
+                          activeSocket = newSocket
+                          isCallActive = true
+                          statusTv.text = "Status: Connected with $callerName"
+                          statusTv.setTextColor(Color.parseColor("#10B981"))
+                          initAudioStream(newSocket)
+                      }
+                      .setNegativeButton("Ignore") { _, _ ->
+                          try { newSocket.close() } catch (e: Exception) {}
                       }
                       .show()
               }
 
               private fun connectToPeer(device: BluetoothDevice) {
                   if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return
-                  btAdapter?.cancelDiscovery()
+                  
+                  scanRunnable?.let { handler.removeCallbacks(it) }
+                  if (btAdapter!!.isDiscovering) btAdapter!!.cancelDiscovery()
+                  resetScanButton()
+
                   connectThread?.cancel()
                   connectThread = ConnectThread(device)
                   connectThread?.start()
                   statusTv.text = "Connecting to ${device.name}..."
+                  statusTv.setTextColor(Color.parseColor("#F59E0B"))
               }
 
               private inner class ConnectThread(private val device: BluetoothDevice) : Thread() {
                   private var socket: BluetoothSocket? = null
+
                   init {
                       try {
                           if (ActivityCompat.checkSelfPermission(this@MainActivity, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
                               socket = device.createRfcommSocketToServiceRecord(APP_UUID)
                           }
-                      } catch (e: IOException) { e.printStackTrace() }
+                      } catch (e: IOException) {
+                          e.printStackTrace()
+                      }
                   }
 
                   override fun run() {
                       try {
                           socket?.connect()
-                          val name = device.name ?: "User"
+                          
+                          activeSocket?.close()
+                          activeSocket = socket
+                          isCallActive = true
+
                           runOnUiThread {
-                              switchToInCallUI(name)
+                              statusTv.text = "Status: Connected with ${device.name}"
+                              statusTv.setTextColor(Color.parseColor("#10B981"))
+                              scanBtn.visibility = View.GONE
+                              disconnectBtn.visibility = View.VISIBLE
+                              listView.visibility = View.GONE
                           }
                           initAudioStream(socket!!)
                       } catch (e: IOException) {
                           e.printStackTrace()
                           try { socket?.close() } catch (e2: Exception) {}
-                          runOnUiThread { statusTv.text = "Connection Failed!" }
-                          startIncomingListener()
+                          runOnUiThread {
+                              statusTv.text = "Status: Connection Failed. Try again."
+                              statusTv.setTextColor(Color.parseColor("#EF4444"))
+                          }
                       }
                   }
-                  fun cancel() { try { socket?.close() } catch (e: Exception) {} }
-              }
 
-              private fun switchToInCallUI(name: String) {
-                  connectedUserTv.text = name
-                  mainDashboardLayout.visibility = View.GONE
-                  inCallScreenLayout.visibility = View.VISIBLE
-                  isCallRunning = true
-              }
-
-              private fun toggleMute() {
-                  isMuted = !isMuted
-                  muteBtn.text = if (isMuted) "🔇 Unmute" else "🎤 Mute"
-                  muteBtn.background = GradientDrawable().apply {
-                      shape = GradientDrawable.OVAL
-                      setColor(if (isMuted) Color.parseColor("#EF4444") else Color.parseColor("#334155"))
+                  fun cancel() {
+                      try { socket?.close() } catch (e: Exception) {}
                   }
-                  Toast.makeText(this, if (isMuted) "Mic Muted" else "Mic Active", Toast.LENGTH_SHORT).show()
-              }
-
-              private fun toggleAudioRecording() {
-                  isRecordingAudio = !isRecordingAudio
-                  recordBtn.text = if (isRecordingAudio) "⏹️ Stop" else "⏺️ Record"
-                  recordBtn.background = GradientDrawable().apply {
-                      shape = GradientDrawable.OVAL
-                      setColor(if (isRecordingAudio) Color.parseColor("#EF4444") else Color.parseColor("#334155"))
-                  }
-                  Toast.makeText(this, if (isRecordingAudio) "Audio Recording Started" else "Recording Saved", Toast.LENGTH_SHORT).show()
               }
 
               private fun initAudioStream(socket: BluetoothSocket) {
@@ -625,7 +575,9 @@ jobs:
                       try {
                           input = socket.inputStream
                           output = socket.outputStream
-                      } catch (e: Exception) { e.printStackTrace() }
+                      } catch (e: Exception) {
+                          e.printStackTrace()
+                      }
                   }
 
                   override fun run() {
@@ -644,35 +596,41 @@ jobs:
                           .setBufferSizeInBytes(bufSize)
                           .build()
 
+                      if (AcousticEchoCanceler.isAvailable()) {
+                          val echoCanceler = AcousticEchoCanceler.create(recorder.audioSessionId)
+                          echoCanceler?.enabled = true
+                      }
+
                       recorder.startRecording()
                       track.play()
 
                       val sendBuffer = ByteArray(bufSize)
                       val recvBuffer = ByteArray(bufSize)
 
-                      // Incoming Audio Stream
                       Thread {
                           try {
-                              while (isCallRunning) {
-                                  val bytes = input?.read(recvBuffer) ?: -1
-                                  if (bytes > 0) {
-                                      track.write(recvBuffer, 0, bytes)
+                              while (isCallActive) {
+                                  val readBytes = input?.read(recvBuffer) ?: -1
+                                  if (readBytes > 0) {
+                                      track.write(recvBuffer, 0, readBytes)
                                   }
                               }
-                          } catch (e: Exception) {}
+                          } catch (e: Exception) {
+                              e.printStackTrace()
+                          }
                       }.start()
 
-                      // Outgoing Audio Stream
                       try {
-                          while (isCallRunning) {
+                          while (isCallActive) {
                               val size = recorder.read(sendBuffer, 0, sendBuffer.size)
-                              if (size > 0 && !isMuted) {
+                              if (size > 0) {
                                   output?.write(sendBuffer, 0, size)
                                   output?.flush()
                               }
                           }
-                      } catch (e: Exception) {}
-                      finally {
+                      } catch (e: Exception) {
+                          e.printStackTrace()
+                      } finally {
                           try {
                               recorder.stop()
                               recorder.release()
@@ -685,24 +643,27 @@ jobs:
               }
 
               private fun terminateCall() {
-                  isCallRunning = false
+                  isCallActive = false
                   try {
+                      activeSocket?.close()
                       acceptThread?.cancel()
                       connectThread?.cancel()
                   } catch (e: Exception) {}
 
-                  inCallScreenLayout.visibility = View.GONE
-                  mainDashboardLayout.visibility = View.VISIBLE
-                  statusTv.text = "Status: Call Ended"
-                  scanBtn.text = "🔍 Scan Nearby App Users"
-                  scanBtn.isEnabled = true
-                  Toast.makeText(this, "Call Disconnected", Toast.LENGTH_SHORT).show()
+                  runOnUiThread {
+                      statusTv.text = "Status: Call Ended / Killed by Phone Call"
+                      statusTv.setTextColor(Color.parseColor("#EF4444"))
+                      disconnectBtn.visibility = View.GONE
+                      scanBtn.visibility = View.VISIBLE
+                      listView.visibility = View.VISIBLE
+                  }
                   startIncomingListener()
               }
 
               override fun onDestroy() {
                   super.onDestroy()
                   try { unregisterReceiver(receiver) } catch (e: Exception) {}
+                  scanRunnable?.let { handler.removeCallbacks(it) }
                   terminateCall()
               }
           }
@@ -714,5 +675,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Bluetooth-Call-App-v3
+          name: Bluetooth-Call-App-v8
           path: app/build/outputs/apk/debug/app-debug.apk
+
