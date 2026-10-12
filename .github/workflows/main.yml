@@ -1,4 +1,4 @@
-name: Build Simple Bluetooth Scanner APK
+name: Build Smooth Bluetooth Scanner APK
 
 on:
   push:
@@ -27,14 +27,12 @@ jobs:
 
       - name: Create Structure & Gradle Files
         run: |
-          mkdir -p app/src/main/java/com/bt/scanner
+          mkdir -p app/src/main/java/com/bt/smartscanner
           mkdir -p app/src/main/res/values
           mkdir -p app/src/main/res/drawable
 
-          # Android SDK पाथ सीधे local.properties में सेट करना
           echo "sdk.dir=/usr/local/lib/android/sdk" > local.properties
 
-          # Settings.gradle
           cat > settings.gradle <<'EOF'
           pluginManagement {
               repositories {
@@ -50,11 +48,10 @@ jobs:
                   mavenCentral()
               }
           }
-          rootProject.name = "BTScannerApp"
+          rootProject.name = "SmartBTScanner"
           include(":app")
           EOF
 
-          # Root build.gradle
           cat > build.gradle <<'EOF'
           plugins {
               id "com.android.application" version "8.2.2" apply false
@@ -62,17 +59,16 @@ jobs:
           }
           EOF
 
-          # App build.gradle
           cat > app/build.gradle <<'EOF'
           plugins {
               id "com.android.application"
               id "org.jetbrains.kotlin.android"
           }
           android {
-              namespace "com.bt.scanner"
+              namespace "com.bt.smartscanner"
               compileSdk 34
               defaultConfig {
-                  applicationId "com.bt.scanner"
+                  applicationId "com.bt.smartscanner"
                   minSdk 26
                   targetSdk 34
                   versionCode 1
@@ -91,7 +87,6 @@ jobs:
           }
           EOF
 
-          # AndroidManifest.xml
           cat > app/src/main/AndroidManifest.xml <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -103,7 +98,7 @@ jobs:
 
               <application
                   android:allowBackup="true"
-                  android:label="BT Scanner"
+                  android:label="Smart BT Scanner"
                   android:icon="@drawable/ic_launcher_bg"
                   android:roundIcon="@drawable/ic_launcher_bg"
                   android:theme="@style/Theme.AppCompat.NoActionBar">
@@ -120,38 +115,30 @@ jobs:
           </manifest>
           EOF
 
-          # 3D Geometric Blue & White App Icon (Vector Drawable)
+          # 3D Geometric Blue & White App Icon
           cat > app/src/main/res/drawable/ic_launcher_bg.xml <<'EOF'
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
               android:width="108dp"
               android:height="108dp"
               android:viewportWidth="108"
               android:viewportHeight="108">
-              <!-- Background 3D Blue Gradient Shape -->
-              <path
-                  android:fillColor="#1E3A8A"
-                  android:pathData="M0,0h108v108H0z"/>
-              <path
-                  android:fillColor="#3B82F6"
-                  android:pathData="M0,54l54,54h54L54,0z"/>
-              <!-- White Geometric Bluetooth Symbol -->
-              <path
-                  android:fillColor="#FFFFFF"
-                  android:pathData="M54,24v30l-15,-15 -4,4 19,19 -19,19 4,4 15,-15v30l22,-22 -16,-16 16,-16z M58,34l10,10 -10,10z M58,74l10,-10 -10,-10z"/>
+              <path android:fillColor="#1E3A8A" android:pathData="M0,0h108v108H0z"/>
+              <path android:fillColor="#3B82F6" android:pathData="M0,54l54,54h54L54,0z"/>
+              <path android:fillColor="#FFFFFF" android:pathData="M54,24v30l-15,-15 -4,4 19,19 -19,19 4,4 15,-15v30l22,-22 -16,-16 16,-16z M58,34l10,10 -10,10z M58,74l10,-10 -10,-10z"/>
           </vector>
           EOF
 
           cat > app/src/main/res/values/strings.xml <<'EOF'
           <resources>
-              <string name="app_name">BT Scanner</string>
+              <string name="app_name">Smart BT Scanner</string>
           </resources>
           EOF
 
-      # Step 5: MainActivity.kt (Header, Search Bar, Scan Button & Device List)
+      # MainActivity with Auto Bluetooth On/Off, Search Bar, and Local Memory Storage
       - name: Generate MainActivity
         run: |
-          cat > app/src/main/java/com/bt/scanner/MainActivity.kt <<'EOF'
-          package com.bt.scanner
+          cat > app/src/main/java/com/bt/smartscanner/MainActivity.kt <<'EOF'
+          package com.bt.smartscanner
 
           import android.Manifest
           import android.bluetooth.BluetoothAdapter
@@ -161,6 +148,7 @@ jobs:
           import android.content.Context
           import android.content.Intent
           import android.content.IntentFilter
+          import android.content.SharedPreferences
           import android.content.pm.PackageManager
           import android.os.Bundle
           import android.text.Editable
@@ -180,22 +168,22 @@ jobs:
               private lateinit var listView: ListView
               private lateinit var searchEditText: EditText
               private lateinit var statusText: TextView
+              private lateinit var sharedPreferences: SharedPreferences
 
               private val receiver = object : BroadcastReceiver() {
                   override fun onReceive(context: Context, intent: Intent) {
-                      when (intent.action) {
-                          BluetoothDevice.ACTION_FOUND -> {
-                              val device: BluetoothDevice? = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
-                              if (device != null) {
-                                  if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
-                                      val name = device.name ?: "Unknown Device"
-                                      val address = device.address
-                                      val entry = "$name\n$address"
-                                      if (!deviceAddressMap.containsKey(address)) {
-                                          deviceAddressMap[address] = address
-                                          deviceList.add(entry)
-                                          adapter.notifyDataSetChanged()
-                                      }
+                      if (BluetoothDevice.ACTION_FOUND == intent.action) {
+                          val device: BluetoothDevice? = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                          if (device != null) {
+                              if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
+                                  val name = device.name ?: "Unknown Device"
+                                  val address = device.address
+                                  val entry = "$name\n$address"
+                                  if (!deviceAddressMap.containsKey(address)) {
+                                      deviceAddressMap[address] = address
+                                      deviceList.add(entry)
+                                      adapter.notifyDataSetChanged()
+                                      saveDeviceToMemory(name, address)
                                   }
                               }
                           }
@@ -205,12 +193,16 @@ jobs:
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
+                  sharedPreferences = getSharedPreferences("BT_Scanner_Prefs", Context.MODE_PRIVATE)
+                  
                   requestPermissions()
                   initBluetooth()
+                  enableBluetoothAutomatically()
                   setupUI()
-                  
+
                   val filter = IntentFilter(BluetoothDevice.ACTION_FOUND)
                   registerReceiver(receiver, filter)
+                  loadSavedDevicesFromMemory()
               }
 
               private fun requestPermissions() {
@@ -220,7 +212,7 @@ jobs:
                       Manifest.permission.BLUETOOTH_ADMIN,
                       Manifest.permission.ACCESS_FINE_LOCATION
                   )
-                  ActivityCompat.requestPermissions(this, perms, 401)
+                  ActivityCompat.requestPermissions(this, perms, 501)
               }
 
               private fun initBluetooth() {
@@ -228,16 +220,27 @@ jobs:
                   bluetoothAdapter = manager.adapter
               }
 
+              private fun enableBluetoothAutomatically() {
+                  if (bluetoothAdapter != null) {
+                      if (!bluetoothAdapter!!.isEnabled) {
+                          if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
+                              val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+                              startActivityForResult(enableBtIntent, 101)
+                          }
+                      }
+                  }
+              }
+
               private fun setupUI() {
                   val root = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      setBackgroundColor(0xFF0F172A.toInt()) // Dark 3D Background
+                      setBackgroundColor(0xFF0F172A.toInt())
                       setPadding(24, 32, 24, 32)
                   }
 
                   // Header Title
                   val title = TextView(this).apply {
-                      text = "📡 Bluetooth Pro Scanner"
+                      text = "⚡ Smart Bluetooth Scanner"
                       textSize = 22f
                       setTextColor(0xFFFFD700.toInt())
                       gravity = Gravity.CENTER
@@ -245,14 +248,14 @@ jobs:
                   }
                   root.addView(title)
 
-                  // Search Bar & Scan Button Layout
+                  // Search Bar & Scan Button
                   val topLayout = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       setPadding(0, 0, 0, 16)
                   }
 
                   searchEditText = EditText(this).apply {
-                      hint = "Search device..."
+                      hint = "Search saved/nearby device..."
                       setHintTextColor(0xFF94A3B8.toInt())
                       setTextColor(0xFFFFFFFF.toInt())
                       setBackgroundColor(0xFF1E293B.toInt())
@@ -274,36 +277,26 @@ jobs:
 
                   root.addView(topLayout)
 
-                  // Status text
                   statusText = TextView(this).apply {
-                      text = "Tap 'SCAN' to find nearby devices."
+                      text = "Bluetooth ready. Tap 'SCAN' to search."
                       textSize = 14f
                       setTextColor(0xFF94A3B8.toInt())
                       setPadding(0, 0, 0, 10)
                   }
                   root.addView(statusText)
 
-                  // Device List View
+                  // Device List
                   listView = ListView(this).apply {
                       setBackgroundColor(0xFF1E293B.toInt())
                   }
                   adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, deviceList)
                   listView.adapter = adapter
 
-                  listView.setOnItemClickListener { _, _, position, _ ->
-                      val selectedItem = deviceList[position]
-                      val parts = selectedItem.split("\n")
-                      if (parts.size == 2) {
-                          connectDevice(parts[1])
-                      }
-                  }
-
                   val listParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
                   root.addView(listView, listParams)
 
                   setContentView(root)
 
-                  // Search Filter Logic
                   searchEditText.addTextChangedListener(object : TextWatcher {
                       override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after) {}
                       override fun onTextChanged(s: CharSequence?, start: Int, before, count) {
@@ -316,22 +309,40 @@ jobs:
               private fun startScanning() {
                   if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) return
                   
-                  deviceList.clear()
-                  deviceAddressMap.clear()
-                  adapter.notifyDataSetChanged()
-
                   if (bluetoothAdapter?.isDiscovering == true) {
                       bluetoothAdapter?.cancelDiscovery()
                   }
                   bluetoothAdapter?.startDiscovery()
-                  statusText.text = "Scanning for nearby Bluetooth devices..."
-                  Toast.makeText(this, "Scanning started...", Toast.LENGTH_SHORT).show()
+                  statusText.text = "Scanning nearby devices..."
+                  Toast.makeText(this, "Scan started...", Toast.LENGTH_SHORT).show()
               }
 
-              private fun connectDevice(address: String) {
-                  statusText.text = "Connecting to $address..."
-                  Toast.makeText(this, "Selected Device: $address", Toast.LENGTH_SHORT).show()
-                  // Standard pairing/connection intent trigger can be handled here
+              private fun saveDeviceToMemory(name: String, address: String) {
+                  val editor = sharedPreferences.edit()
+                  editor.putString(address, name)
+                  editor.apply()
+              }
+
+              private fun loadSavedDevicesFromMemory() {
+                  val allEntries = sharedPreferences.all
+                  for ((address, name) in allEntries) {
+                      val entry = "$name\n$address"
+                      if (!deviceAddressMap.containsKey(address)) {
+                          deviceAddressMap[address] = address
+                          deviceList.add(entry)
+                      }
+                  }
+                  adapter.notifyDataSetChanged()
+              }
+
+              override fun onStop() {
+                  super.onStop()
+                  // App close/cut hone par bluetooth disable karna
+                  if (bluetoothAdapter != null && bluetoothAdapter!!.isEnabled) {
+                      if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
+                          bluetoothAdapter?.disable()
+                      }
+                  }
               }
 
               override fun onDestroy() {
@@ -349,5 +360,6 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: BT-Scanner-APK
+          name: Smart-BT-Scanner-APK
           path: app/build/outputs/apk/debug/app-debug.apk
+
