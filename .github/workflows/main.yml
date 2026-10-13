@@ -73,8 +73,8 @@ jobs:
                   applicationId "com.bluetooth.call"
                   minSdk 26
                   targetSdk 34
-                  versionCode 12
-                  versionName "12.0"
+                  versionCode 13
+                  versionName "13.0"
               }
               buildTypes { release { minifyEnabled false } }
               compileOptions {
@@ -148,7 +148,7 @@ jobs:
           </manifest>
           EOF
 
-      - name: Write MainActivity.kt with Stable Connection & Scalable Timer
+      - name: Write MainActivity.kt with Fully Fixed Compiler Errors
         run: |
           cat > app/src/main/java/com/bluetooth/call/MainActivity.kt <<'EOF'
           package com.bluetooth.call
@@ -218,14 +218,12 @@ jobs:
               private var activeSocket: BluetoothSocket? = null
               private lateinit var audioManager: AudioManager
 
-              // UI Layouts & Components
               private lateinit var homeLayout: LinearLayout
               private lateinit var callLayout: LinearLayout
               private lateinit var statusTv: TextView
               private lateinit var scanBtn: Button
               private lateinit var listView: ListView
               
-              // Call Dashboard Components
               private lateinit var callTitleTv: TextView
               private lateinit var timerTv: TextView
               private lateinit var muteBtn: Button
@@ -236,12 +234,10 @@ jobs:
               private val handler = Handler(Looper.getMainLooper())
               private var scanRunnable: Runnable? = null
               
-              // Call Timer Variables
               private var secondsElapsed = 0
               private val timerHandler = Handler(Looper.getMainLooper())
               private lateinit var timerRunnable: Runnable
 
-              // Audio Recorder Helper variables
               private var recordingFile: File? = null
               private var recordingOutputStream: FileOutputStream? = null
               private var totalAudioLen: Long = 0
@@ -285,7 +281,6 @@ jobs:
                   btAdapter = BluetoothAdapter.getDefaultAdapter()
                   audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
-                  // Main Root Layout (VIP Styling)
                   val mainRoot = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       setBackgroundColor(Color.parseColor("#0F172A"))
@@ -293,7 +288,6 @@ jobs:
                       layoutParams = LinearLayout.LayoutParams(-1, -1)
                   }
 
-                  // 1. Home Dashboard Layout
                   homeLayout = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       layoutParams = LinearLayout.LayoutParams(-1, -1)
@@ -348,7 +342,6 @@ jobs:
                   homeLayout.addView(scanBtn)
                   homeLayout.addView(listView)
 
-                  // 2. VIP Active Call Dashboard Layout (Hidden by default)
                   callLayout = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       gravity = Gravity.CENTER
@@ -384,7 +377,6 @@ jobs:
                       setPadding(0, 0, 0, 30)
                   }
 
-                  // Buttons Row (Mute, Speaker & Record)
                   val controlsLayout = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER
@@ -425,7 +417,6 @@ jobs:
                   controlsLayout.addView(speakerBtn)
                   controlsLayout.addView(recordBtn)
 
-                  // Big Red Disconnect Button
                   endCallBtn = Button(this).apply {
                       text = "🛑 End Call"
                       setBackgroundColor(Color.parseColor("#EF4444"))
@@ -510,7 +501,6 @@ jobs:
                   callLayout.visibility = View.VISIBLE
                   callTitleTv.text = "Connected: $peerName"
                   
-                  // Start Call Timer (00:00 scaling to hours seamlessly)
                   secondsElapsed = 0
                   timerRunnable = object : Runnable {
                       override fun run() {
@@ -628,31 +618,42 @@ jobs:
               private fun writeWavHeader(out: OutputStream, totalAudioLen: Long, totalDataLen: Long, longSampleRate: Long, channels: Short, bitsPerSample: Short) {
                   val byteRate = longSampleRate * channels * bitsPerSample / 8
                   val header = ByteArray(44)
-                  header[0] = ('R'.toInt()).toByte(); header[1] = ('I'.toInt()).toByte(); header[2] = ('F'.toInt()).toByte(); header[3] = ('F'.toInt()).toByte()
-                  header[4] = (totalDataLen and 0xffL).code.toByte()
-                  header[5] = ((totalDataLen shr 8) and 0xffL).code.toByte()
-                  header[6] = ((totalDataLen shr 16) and 0xffL).code.toByte()
-                  header[7] = ((totalDataLen shr 24) and 0xffL).code.toByte()
-                  header[8] = ('W'.toInt()).toByte(); header[9] = ('A'.toInt()).toByte(); header[10] = ('V'.toInt()).toByte(); header[11] = ('E'.toInt()).toByte()
-                  header[12] = ('f'.toInt()).toByte(); header[13] = ('m'.toInt()).toByte(); header[14] = ('t'.toInt()).toByte(); header[15] = (' '.toInt()).toByte()
+                  header[0] = ('R'.code.toByte()); header[1] = ('I'.code.toByte()); header[2] = ('F'.code.toByte()); header[3] = ('F'.code.toByte())
+                  
+                  // सुरक्षित टाइपकास्टिंग का उपयोग किया गया है ताकि बिल्ड फेल न हो
+                  val dataLenInt = totalDataLen.toInt()
+                  header[4] = (dataLenInt and 0xff).toByte()
+                  header[5] = ((dataLenInt shr 8) and 0xff).toByte()
+                  header[6] = ((dataLenInt shr 16) and 0xff).toByte()
+                  header[7] = ((dataLenInt shr 24) and 0xff).toByte()
+                  
+                  header[8] = ('W'.code.toByte()); header[9] = ('A'.code.toByte()); header[10] = ('V'.code.toByte()); header[11] = ('E'.code.toByte())
+                  header[12] = ('f'.code.toByte()); header[13] = ('m'.code.toByte()); header[14] = ('t'.code.toByte()); header[15] = (' '.code.toByte())
                   header[16] = 16; header[17] = 0; header[18] = 0; header[19] = 0
                   header[20] = 1; header[21] = 0
                   header[22] = channels.toByte(); header[23] = 0
-                  header[24] = (longSampleRate and 0xffL).code.toByte()
-                  header[25] = ((longSampleRate shr 8) and 0xffL).code.toByte()
-                  header[26] = ((longSampleRate shr 16) and 0xffL).code.toByte()
-                  header[27] = ((longSampleRate shr 24) and 0xffL).code.toByte()
-                  header[28] = (byteRate and 0xffL).code.toByte()
-                  header[29] = ((byteRate shr 8) and 0xffL).code.toByte()
-                  header[30] = ((byteRate shr 16) and 0xffL).code.toByte()
-                  header[31] = ((byteRate shr 24) and 0xffL).code.toByte()
+                  
+                  val srInt = longSampleRate.toInt()
+                  header[24] = (srInt and 0xff).toByte()
+                  header[25] = ((srInt shr 8) and 0xff).toByte()
+                  header[26] = ((srInt shr 16) and 0xff).toByte()
+                  header[27] = ((srInt shr 24) and 0xff).toByte()
+                  
+                  val brInt = byteRate.toInt()
+                  header[28] = (brInt and 0xff).toByte()
+                  header[29] = ((brInt shr 8) and 0xff).toByte()
+                  header[30] = ((brInt shr 16) and 0xff).toByte()
+                  header[31] = ((brInt shr 24) and 0xff).toByte()
+                  
                   header[32] = (channels * bitsPerSample / 8).toByte(); header[33] = 0
                   header[34] = bitsPerSample.toByte(); header[35] = 0
-                  header[36] = ('d'.toInt()).toByte(); header[37] = ('a'.toInt()).toByte(); header[38] = ('t'.toInt()).toByte(); header[39] = ('a'.toInt()).toByte()
-                  header[40] = (totalAudioLen and 0xffL).code.toByte()
-                  header[41] = ((totalAudioLen shr 8) and 0xffL).code.toByte()
-                  header[42] = ((totalAudioLen shr 16) and 0xffL).code.toByte()
-                  header[43] = ((totalAudioLen shr 24) and 0xffL).code.toByte()
+                  header[36] = ('d'.code.toByte()); header[37] = ('a'.code.toByte()); header[38] = ('t'.code.toByte()); header[39] = ('a'.code.toByte())
+                  
+                  val audioLenInt = totalAudioLen.toInt()
+                  header[40] = (audioLenInt and 0xff).toByte()
+                  header[41] = ((audioLenInt shr 8) and 0xff).toByte()
+                  header[42] = ((audioLenInt shr 16) and 0xff).toByte()
+                  header[43] = ((audioLenInt shr 24) and 0xff).toByte()
                   out.write(header, 0, 44)
               }
 
@@ -674,7 +675,7 @@ jobs:
               }
 
               private fun intToByteArray(i: Int): ByteArray {
-                  return byteArrayOf((i and 0xff).code.toByte(), ((i shr 8) and 0xff).code.toByte(), ((i shr 16) and 0xff).code.toByte(), ((i shr 24) and 0xff).code.toByte())
+                  return byteArrayOf((i and 0xff).toByte(), ((i shr 8) and 0xff).toByte(), ((i shr 16) and 0xff).toByte(), ((i shr 24) and 0xff).toByte())
               }
 
               private fun shortToByteArray(s: Short): ByteArray {
@@ -838,7 +839,6 @@ jobs:
 
                   override fun run() {
                       try {
-                          // कनेक्शन से पहले डिस्कवरी रोकना अनिवार्य है ताकि कनेक्शन फेल न हो
                           if (btAdapter != null && ActivityCompat.checkSelfPermission(this@MainActivity, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED) {
                               if (btAdapter!!.isDiscovering) {
                                   btAdapter!!.cancelDiscovery()
@@ -991,5 +991,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Bluetooth-Call-App-v12
+          name: Bluetooth-Call-App-v13
           path: app/build/outputs/apk/debug/app-debug.apk
+
