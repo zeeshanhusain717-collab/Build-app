@@ -73,8 +73,8 @@ jobs:
                   applicationId "com.bluetooth.call"
                   minSdk 26
                   targetSdk 34
-                  versionCode 11
-                  versionName "11.0"
+                  versionCode 12
+                  versionName "12.0"
               }
               buildTypes { release { minifyEnabled false } }
               compileOptions {
@@ -148,7 +148,7 @@ jobs:
           </manifest>
           EOF
 
-      - name: Write MainActivity.kt with Call Recording, Timer, Mute, Speaker & VIP UI
+      - name: Write MainActivity.kt with Stable Connection & Scalable Timer
         run: |
           cat > app/src/main/java/com/bluetooth/call/MainActivity.kt <<'EOF'
           package com.bluetooth.call
@@ -510,13 +510,18 @@ jobs:
                   callLayout.visibility = View.VISIBLE
                   callTitleTv.text = "Connected: $peerName"
                   
-                  // Start Call Timer
+                  // Start Call Timer (00:00 scaling to hours seamlessly)
                   secondsElapsed = 0
                   timerRunnable = object : Runnable {
                       override fun run() {
-                          val mins = secondsElapsed / 60
+                          val hours = secondsElapsed / 3600
+                          val mins = (secondsElapsed % 3600) / 60
                           val secs = secondsElapsed % 60
-                          timerTv.text = String.format("%02d:%02d", mins, secs)
+                          timerTv.text = if (hours > 0) {
+                              String.format("%02d:%02d:%02d", hours, mins, secs)
+                          } else {
+                              String.format("%02d:%02d", mins, secs)
+                          }
                           secondsElapsed++
                           timerHandler.postDelayed(this, 1000)
                       }
@@ -585,7 +590,6 @@ jobs:
                       recordingFile = File(musicDir, "BTCall_${System.currentTimeMillis()}.wav")
                       recordingOutputStream = FileOutputStream(recordingFile)
                       
-                      // Write initial 44 bytes WAV header placeholder
                       writeWavHeader(recordingOutputStream!!, 0, 0, 8000, 1.toShort(), 16.toShort())
                       totalAudioLen = 0
 
@@ -605,14 +609,13 @@ jobs:
                       recordingOutputStream?.close()
                       recordingOutputStream = null
 
-                      // Fix WAV header with actual recorded length
                       if (recordingFile != null && recordingFile!!.exists()) {
                           val totalDataLen = totalAudioLen + 36
                           RandomAccessFile(recordingFile, "rw").use { raf ->
                               raf.seek(0)
                               writeWavHeaderRandomAccess(raf, totalAudioLen, totalDataLen, 8000, 1.toShort(), 16.toShort())
                           }
-                          Toast.makeText(this, "Saved: ${recordingFile!!.name}", Toast.LENGTH_LONG).show()
+                          Toast.makeText(this, "Saved in Music: ${recordingFile!!.name}", Toast.LENGTH_LONG).show()
                       }
                   } catch (e: Exception) {
                       e.printStackTrace()
@@ -625,13 +628,13 @@ jobs:
               private fun writeWavHeader(out: OutputStream, totalAudioLen: Long, totalDataLen: Long, longSampleRate: Long, channels: Short, bitsPerSample: Short) {
                   val byteRate = longSampleRate * channels * bitsPerSample / 8
                   val header = ByteArray(44)
-                  header[0] = 'R'.code.toByte(); header[1] = 'I'.code.toByte(); header[2] = 'F'.code.toByte(); header[3] = 'F'.code.toByte()
+                  header[0] = ('R'.toInt()).toByte(); header[1] = ('I'.toInt()).toByte(); header[2] = ('F'.toInt()).toByte(); header[3] = ('F'.toInt()).toByte()
                   header[4] = (totalDataLen and 0xffL).code.toByte()
                   header[5] = ((totalDataLen shr 8) and 0xffL).code.toByte()
                   header[6] = ((totalDataLen shr 16) and 0xffL).code.toByte()
                   header[7] = ((totalDataLen shr 24) and 0xffL).code.toByte()
-                  header[8] = 'W'.code.toByte(); header[9] = 'A'.code.toByte(); header[10] = 'V'.code.toByte(); header[11] = 'E'.code.toByte()
-                  header[12] = 'f'.code.toByte(); header[13] = 'm'.code.toByte(); header[14] = 't'.code.toByte(); header[15] = ' '.code.toByte()
+                  header[8] = ('W'.toInt()).toByte(); header[9] = ('A'.toInt()).toByte(); header[10] = ('V'.toInt()).toByte(); header[11] = ('E'.toInt()).toByte()
+                  header[12] = ('f'.toInt()).toByte(); header[13] = ('m'.toInt()).toByte(); header[14] = ('t'.toInt()).toByte(); header[15] = (' '.toInt()).toByte()
                   header[16] = 16; header[17] = 0; header[18] = 0; header[19] = 0
                   header[20] = 1; header[21] = 0
                   header[22] = channels.toByte(); header[23] = 0
@@ -645,7 +648,7 @@ jobs:
                   header[31] = ((byteRate shr 24) and 0xffL).code.toByte()
                   header[32] = (channels * bitsPerSample / 8).toByte(); header[33] = 0
                   header[34] = bitsPerSample.toByte(); header[35] = 0
-                  header[36] = 'd'.code.toByte(); header[37] = 'a'.code.toByte(); header[38] = 't'.code.toByte(); header[39] = 'a'.code.toByte()
+                  header[36] = ('d'.toInt()).toByte(); header[37] = ('a'.toInt()).toByte(); header[38] = ('t'.toInt()).toByte(); header[39] = ('a'.toInt()).toByte()
                   header[40] = (totalAudioLen and 0xffL).code.toByte()
                   header[41] = ((totalAudioLen shr 8) and 0xffL).code.toByte()
                   header[42] = ((totalAudioLen shr 16) and 0xffL).code.toByte()
@@ -660,7 +663,7 @@ jobs:
                   raf.write(intToByteArray(totalDataLen.toInt()))
                   raf.writeBytes("WAVEfmt ")
                   raf.write(intToByteArray(16))
-                  raf.write(shortToByteArray(1)) // PCM
+                  raf.write(shortToByteArray(1))
                   raf.write(shortToByteArray(channels))
                   raf.write(intToByteArray(longSampleRate.toInt()))
                   raf.write(intToByteArray(byteRate.toInt()))
@@ -835,6 +838,13 @@ jobs:
 
                   override fun run() {
                       try {
+                          // कनेक्शन से पहले डिस्कवरी रोकना अनिवार्य है ताकि कनेक्शन फेल न हो
+                          if (btAdapter != null && ActivityCompat.checkSelfPermission(this@MainActivity, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED) {
+                              if (btAdapter!!.isDiscovering) {
+                                  btAdapter!!.cancelDiscovery()
+                              }
+                          }
+
                           socket?.connect()
                           
                           activeSocket?.close()
@@ -905,7 +915,6 @@ jobs:
                       val sendBuffer = ByteArray(bufSize)
                       val recvBuffer = ByteArray(bufSize)
 
-                      // Incoming Audio Stream Reader Thread
                       Thread {
                           try {
                               while (isCallActive) {
@@ -919,17 +928,15 @@ jobs:
                           }
                       }.start()
 
-                      // Outgoing Audio Stream Writer Thread (With Mute & Recording Support)
                       try {
                           while (isCallActive) {
                               val size = recorder.read(sendBuffer, 0, sendBuffer.size)
                               if (size > 0) {
                                   var dataToWrite = sendBuffer
                                   if (isMuted) {
-                                      dataToWrite = ByteArray(size) // Silent bytes
+                                      dataToWrite = ByteArray(size)
                                   }
 
-                                  // If recording is active, write PCM audio bytes to WAV file
                                   if (isRecording && recordingOutputStream != null) {
                                       try {
                                           recordingOutputStream?.write(dataToWrite, 0, size)
@@ -984,6 +991,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Bluetooth-Call-App-v11
+          name: Bluetooth-Call-App-v12
           path: app/build/outputs/apk/debug/app-debug.apk
-
